@@ -1424,6 +1424,7 @@ function netHost(){
       R={};drops=[];LS.ids=null;HS.st={};HS.seen={};HS.pending=null;HS.dirty=1;
       lobbyView='lobby';toast('Лобби «'+nameL+'» создано. Код: '+NET.code);refreshStart();
       hostFlush();
+      if(uiFn===startUI)closeUI();
     });
   }).catch(error=>{if(NET.status==='connecting')netFail('Не удалось подключиться к игровому серверу: '+error.message);});
 }
@@ -1447,6 +1448,8 @@ function netJoin(code,password){
       const queued=queuedHostMessages.splice(0);
       refreshStart();
       for(const message of queued)clientRecv(message);
+      // The terminal dialog blocks keyboard and touch movement; close it once room entry succeeds.
+      if(uiFn===startUI)closeUI();
     });
   }).catch(error=>{joinAckPending=false;queuedHostMessages=[];if(NET.status==='connecting')netJoinFail('Не удалось подключиться к игровому серверу: '+error.message);});
 }
