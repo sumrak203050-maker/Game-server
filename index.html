@@ -998,6 +998,7 @@ const TNAME={kitchen:'кухни',shop:'магазина',casino:'казино'}
    ОБЩЕЕ СОСТОЯНИЕ ИГРЫ (G) — хранится у хоста и реплицируется всем
    ===================================================================== */
 const NET={socket:null,id:'local',host:true,code:'',status:'idle',conns:{},hostConn:null,err:'',rq:0,cbs:{},intentionalClose:false};
+const NET_SYNC={sent:0,received:0,lastSentAt:0,lastReceivedAt:0};
 function mkRooms(){const o={};for(let i=1;i<=10;i++)o[i]={owner:null,locked:false};return o;}
 function newG(){return{lname:'',max:10,started:false,countdown:0,el:0,players:[],rooms:mkRooms(),tills:{kitchen:0,shop:0},dep:{},log:[],trial:null,callCd:0,winner:null,mypend:null};}
 function selfEntry(host){return{id:NET.id,name:NM(),look:Object.assign({},S.look),host:!!host,jail:null};}
@@ -1485,6 +1486,7 @@ async function copyNetworkDiagnostics(){
     'Время: '+new Date().toISOString(),
     'Страница: '+location.href,
     'Сервер: '+GAME_SERVER_URL,
+    'Синхронизация: '+(NET.status==='lobby'?(NET.host?'хост':'игрок')+'; отправлено '+NET_SYNC.sent+'; получено '+NET_SYNC.received+'; последний приём '+(NET_SYNC.lastReceivedAt?((performance.now()-NET_SYNC.lastReceivedAt)/1000).toFixed(1)+' сек назад':'ещё не было'):'не в лобби'),
     'Проверка: '+(NET_DIAG.running?'выполняется':'остановлена'),
     '',
     ...(NET_DIAG.lines.length?NET_DIAG.lines:['Логи пока пусты. Сначала запустите проверку.'])
@@ -1509,6 +1511,7 @@ async function copyNetworkDiagnostics(){
 function networkDiagUI(){
   let h='<p>Эта проверка соединяет игру с Cloudflare через WebSocket. PeerJS и Socket.IO больше не используются.</p>';
   if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join('\n'))+'</div>';
+  if(NET.status==='lobby')h+='<div class="wallet">Синхронизация персонажей: отправлено <b>'+NET_SYNC.sent+'</b> · получено <b>'+NET_SYNC.received+'</b> · последнее обновление '+(NET_SYNC.lastReceivedAt?((performance.now()-NET_SYNC.lastReceivedAt)/1000).toFixed(1)+' сек назад':'ожидание')+'</div>';
   if(NET_DIAG.running)h+='<div class="wallet">Идёт проверка… не закрывайте окно.</div>';
   h+='<div class="row">'+btn(NET_DIAG.running?'Проверка…':'▶ Запустить проверку',runNetworkDiagnostics,NET_DIAG.running?'dis':'gold')+btn('📋 Копировать логи',copyNetworkDiagnostics,NET_DIAG.lines.length?'':'dis')+btn('Закрыть',closeUI)+'</div>';
   h+='<p class="small">Нажмите «Копировать логи» и вставьте результат сюда. Пароли проверка не показывает.</p>';return h;
@@ -1589,7 +1592,7 @@ function clientRecv(m){
     case'welcome':NET.status='lobby';NET.host=false;lobbyView='lobby';R={};drops=[];LS.ids=null;toast('Вы вошли в лобби');refreshStart();break;
     case'deny':netJoinFail(m.why||'Вход запрещён');break;
     case'g':G=m.g;gAt=performance.now();if(NET.status!=='lobby'){NET.status='lobby';NET.host=false;}break;
-    case'snap':applySnap(m,false);break;
+    case'snap':NET_SYNC.received++;NET_SYNC.lastReceivedAt=performance.now();applySnap(m,false);break;
     case'chat':onChat(m);break;
     case'wheel':startWheel(m.w);break;
     case'res':{const cb=NET.cbs[m.rid];if(cb){delete NET.cbs[m.rid];cb(m.r);}break;}
@@ -1789,7 +1792,7 @@ function netLoop(){
   // The host remains authoritative for shared game rules and interactions.
   if(NET.status==='lobby'&&NET.socket&&NET.socket.connected){
     stAcc+=dt;
-    if(stAcc>=0.10){stAcc=0;NET.socket.emit('game:state',{s:packState()});}
+    if(stAcc>=0.10){stAcc=0;NET.socket.emit('game:state',{s:packState()});NET_SYNC.sent++;NET_SYNC.lastSentAt=performance.now();}
   }
   if(NET.host){
     if(G.countdown>0){HS.cdT-=dt;if(HS.cdT<=0){G.countdown--;HS.cdT=1;HS.dirty=1;if(G.countdown<=0)beginGame();}}
@@ -1801,7 +1804,7 @@ function netLoop(){
       else if(HS.pending){HS.pending.t-=dt;if(HS.pending.t<=0){const c=HS.pending.culprits.slice();HS.pending=null;startTrial('crime',c,null);}}
       if(HS.wheel){HS.wheel.t-=dt;if(HS.wheel.t<=0){const w=HS.wheel;HS.wheel=null;if(plOf(w.who)&&w.pay>0)G.dep[w.who]=(G.dep[w.who]||0)+w.pay;HS.dirty=1;}}
     }
-    for(const id in NET.conns){if(now-(HS.seen[id]||now)>15000){try{NET.conns[id].close();}catch(e){}hostDrop(id);}}
+    for(const id in NET.conns){if(now-(HS.seen[id]||now)>60000){try{NET.conns[id].close();}catch(e){}hostDrop(id);}}
     G.mypend=(HS.pending&&HS.pending.culprits.includes(NET.id))?HS.pending.t:null;
     // Full snapshots are a slower recovery path for room state and dropped items.
     HS.snapT-=dt;if(HS.snapT<=0){HS.snapT=0.50;hostSnap();}
