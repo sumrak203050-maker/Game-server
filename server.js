@@ -197,7 +197,6 @@ io.on('connection', socket => {
       t: 'hello',
       name: cleanText(data.name || 'Игрок', 14) || 'Игрок',
       look: data.look || {},
-      pass: String(data.password || '')
     };
     setImmediate(() => io.to(room.hostId).emit('game:member-message', { id: socket.id, m: hello }));
     announceRoomList();
