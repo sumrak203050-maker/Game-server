@@ -1569,7 +1569,7 @@ function hostRecv(conn,m){
   const pl=plOf(id);if(!pl)return;
   HS.seen[id]=performance.now();
   switch(m.t){
-    case'st':if(m.s&&typeof m.s==='object')HS.st[id]=m.s;break;
+    case'st':if(m.s&&typeof m.s==='object'){HS.st[id]=m.s;NET_SYNC.received++;NET_SYNC.lastReceivedAt=performance.now();}break;
     case'prof':pl.name=cleanName(m.name);pl.look=cleanLook(m.look);HS.dirty=1;break;
     case'chat':hostChat(id,m.text);break;
     case'op':{const res=hostOp(id,m.op,m.d||{});if(HS.dirty)hostFlush();safeSend(conn,{t:'res',rid:m.rid,r:res});break;}
@@ -1606,7 +1606,7 @@ function applySnap(m,local){
     let rr=R[id];if(!rr)rr=R[id]={x:num(s.x),y:num(s.y),tx:num(s.x),ty:num(s.y),st:s,say:null};
     rr.tx=num(s.x);rr.ty=num(s.y);rr.st=s;
   }
-  if(!m.partial)for(const id in R)if(!seen[id])delete R[id];
+  for(const id in R)if(!seen[id])delete R[id];
   if(!local&&m.dr)drops=m.dr;
 }
 /* ---------- хост: снимки и состояние ---------- */
@@ -1635,7 +1635,7 @@ function hostSnap(){
   for(const pl of G.players){const s=pl.id===NET.id?packState():HS.st[pl.id];if(s)p[pl.id]=s;}
   const m={t:'snap',p};
   if(HS.dropsDirty){m.dr=drops.map(d=>({u:d.u,id:d.id,q:d.q,x:+d.x.toFixed(1),y:+d.y.toFixed(1),vx:+d.vx.toFixed(1),vy:+d.vy.toFixed(1),ft:+Math.max(0,d.ft).toFixed(2)}));HS.dropsDirty=0;}
-  bcast(m);applySnap(m,true);
+  bcast(m);if(Object.keys(NET.conns).length){NET_SYNC.sent++;NET_SYNC.lastSentAt=performance.now();}applySnap(m,true);
 }
 const logEvH=text=>{G.log.unshift({t:Math.floor(G.el),text});if(G.log.length>12)G.log.pop();};
 function hostChat(id,text){
@@ -1788,11 +1788,10 @@ function endTrial(){
 let lastNet=performance.now(),stAcc=0;
 function netLoop(){
   const now=performance.now(),dt=Math.min(1,(now-lastNet)/1000);lastNet=now;
-  // Every participant publishes its own position directly to the room.
-  // The host remains authoritative for shared game rules and interactions.
-  if(NET.status==='lobby'&&NET.socket&&NET.socket.connected){
+  // Clients send their position to the host; the host relays complete snapshots.
+  if(!NET.host&&NET.status==='lobby'&&NET.hostConn&&NET.hostConn.open&&NET.socket&&NET.socket.connected){
     stAcc+=dt;
-    if(stAcc>=0.10){stAcc=0;NET.socket.emit('game:state',{s:packState()});NET_SYNC.sent++;NET_SYNC.lastSentAt=performance.now();}
+    if(stAcc>=0.08){stAcc=0;safeSend(NET.hostConn,{t:'st',s:packState()});NET_SYNC.sent++;NET_SYNC.lastSentAt=performance.now();}
   }
   if(NET.host){
     if(G.countdown>0){HS.cdT-=dt;if(HS.cdT<=0){G.countdown--;HS.cdT=1;HS.dirty=1;if(G.countdown<=0)beginGame();}}
@@ -1806,8 +1805,7 @@ function netLoop(){
     }
     for(const id in NET.conns){if(now-(HS.seen[id]||now)>60000){try{NET.conns[id].close();}catch(e){}hostDrop(id);}}
     G.mypend=(HS.pending&&HS.pending.culprits.includes(NET.id))?HS.pending.t:null;
-    // Full snapshots are a slower recovery path for room state and dropped items.
-    HS.snapT-=dt;if(HS.snapT<=0){HS.snapT=0.50;hostSnap();}
+    HS.snapT-=dt;if(HS.snapT<=0){HS.snapT=0.08;hostSnap();}
     HS.gT-=dt;if(HS.dirty||HS.gT<=0)hostFlush();
   }
 }

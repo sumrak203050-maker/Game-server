@@ -163,16 +163,6 @@ export class LobbyHub {
     }) || null;
   }
 
-  sendSocketEvent(ws, event, data) {
-    if (!ws || ws.readyState !== 1) return false;
-    try {
-      ws.send(JSON.stringify({ type: "event", event, data }));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   sendEvent(id, event, data) {
     const ws = this.findSocket(id);
     if (!ws) return false;
@@ -321,42 +311,6 @@ export class LobbyHub {
       await this.announceRoomList();
       return { ok: true };
     }
-    if (event === "game:state") {
-      const roomCode = attachment.roomCode;
-      if (!roomCode) return { ok: false, error: "Игрок не находится в лобби" };
-      const source = data && data.s;
-      if (!source || typeof source !== "object") return { ok: false, error: "Некорректное состояние игрока" };
-      const x = Number(source.x);
-      const y = Number(source.y);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, error: "Некорректная позиция игрока" };
-      const direction = ["l", "r", "u", "d"].includes(source.d) ? source.d : "d";
-      const state = {
-        x: Math.max(0, Math.min(108 * 16, x)),
-        y: Math.max(0, Math.min(60 * 16, y)),
-        d: direction,
-        m: source.m ? 1 : 0,
-        a: Number.isFinite(Number(source.a)) ? Number(source.a) : 0,
-        dc: source.dc ? 1 : 0,
-        s: [0, 1, 2].includes(Number(source.s)) ? Number(source.s) : 0,
-        f: source.f ? 1 : 0,
-        e: source.e === "lift" || source.e === "punch" ? source.e : "",
-        h: cleanText(source.h, 24),
-        k: source.k ? 1 : 0,
-        v: source.v ? 1 : 0
-      };
-      const snapshot = { t: "snap", partial: true, p: { [id]: state } };
-      for (const peer of this.ctx.getWebSockets()) {
-        if (peer === ws || peer.readyState !== 1) continue;
-        const peerAttachment = this.getAttachment(peer);
-        if (peerAttachment.roomCode !== roomCode) continue;
-        this.sendSocketEvent(peer, "game:host-message", snapshot);
-        if (peerAttachment.isHost && !attachment.isHost) {
-          this.sendSocketEvent(peer, "game:member-message", { id, m: { t: "st", s: state } });
-        }
-      }
-      return { ok: true };
-    }
-
     if (event === "game:to-host") {
       const rooms = await this.readRooms();
       const room = rooms[attachment.roomCode];
