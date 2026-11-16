@@ -1399,7 +1399,7 @@ async function copyNetworkDiagnostics(){
 }
 function networkDiagUI(){
   let h='<p>Эта проверка использует новый игровой транспорт Socket.IO. PeerJS больше не нужен для создания комнат, списка и игрового обмена.</p>';
-  if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join(\'\\n\'))+'</div>';
+  if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join('\n'))+'</div>';
   if(NET_DIAG.running)h+='<div class="wallet">Идёт проверка… не закрывайте окно.</div>';
   h+='<div class="row">'+btn(NET_DIAG.running?'Проверка…':'▶ Запустить проверку',runNetworkDiagnostics,NET_DIAG.running?'dis':'gold')+btn('📋 Копировать логи',copyNetworkDiagnostics,NET_DIAG.lines.length?'':'dis')+btn('Закрыть',closeUI)+'</div>';
   h+='<p class="small">Нажмите «Копировать логи» и вставьте результат сюда. Пароли проверка не показывает.</p>';return h;
