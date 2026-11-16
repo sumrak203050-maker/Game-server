@@ -5,7 +5,7 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 }
 function cleanText(value, max) {
-  return String(value == null ? "" : value).replace(/[<>\\u0000-\\u001f]/g, "").trim().slice(0, max);
+  return String(value == null ? "" : value).replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, max);
 }
 function randomHex(bytes = 16) {
   const data = new Uint8Array(bytes);
