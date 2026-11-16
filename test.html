@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ПЛАТНЫЙ ДОМ — проверка сервера</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:22px 16px 40px;background:#100d17;color:#f4efe6;font:16px system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:620px;margin:auto}h1{font-size:25px;color:#ffd84a;margin:8px 0}p{color:#c9bedb;line-height:1.5}.card{background:#292234;border:1px solid #59496d;border-radius:14px;padding:16px;margin:14px 0}.status{font-weight:700;padding:9px 12px;border-radius:8px;background:#3d2a20;color:#ffd19a}.status.ok{background:#173b2b;color:#9af0b4}.status.bad{background:#4b2028;color:#ffafb6}button{background:#78561b;color:#fff;border:0;border-radius:9px;padding:12px 15px;font-size:15px;font-weight:700;min-height:44px;margin:5px 5px 5px 0}button:disabled{opacity:.45}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#17121e;padding:12px;border-radius:8px;color:#eee;font-size:13px}.muted{color:#a99db7;font-size:13px}.row{display:flex;flex-wrap:wrap;gap:4px}
+</style>
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body><main>
+<h1>ПЛАТНЫЙ ДОМ — тест сервера</h1>
+<p>Эта страница проверяет соединение с игровым сервером отдельно от самой игры. Откройте её на телефоне через мобильный интернет и на компьютере.</p>
+<div class="card"><div id="status" class="status">Подключаемся к серверу…</div><p id="detail" class="muted">Ожидание соединения Socket.IO.</p><div class="row"><button id="ping" disabled>Отправить тестовое сообщение</button><button id="refresh" disabled>Обновить список комнат</button></div></div>
+<div class="card"><b>Результат проверки обмена</b><pre id="result">Пока нет результата.</pre></div>
+<div class="card"><b>Активные комнаты</b><pre id="rooms">Список ещё не получен.</pre></div>
+<p class="muted">Пароли комнат здесь не запрашиваются и не отображаются.</p>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const status = $('status'), detail = $('detail'), result = $('result'), rooms = $('rooms');
+  const setStatus = (text, kind) => { status.textContent = text; status.className = 'status ' + (kind || ''); };
+  if (typeof io !== 'function') { setStatus('Socket.IO не загрузился', 'bad'); detail.textContent = 'Проверьте доступность /socket.io/socket.io.js.'; return; }
+  const socket = io({transports:['polling','websocket'], tryAllTransports:true, upgrade:true, timeout:90000, reconnection:true, reconnectionAttempts:8});
+  socket.on('connect', () => {
+    setStatus('Соединение установлено', 'ok');
+    detail.textContent = 'ID: ' + socket.id + ' · транспорт: ' + socket.io.engine.transport.name;
+    $('ping').disabled = false; $('refresh').disabled = false; loadRooms();
+  });
+  socket.on('disconnect', reason => { setStatus('Соединение потеряно', 'bad'); detail.textContent = String(reason); $('ping').disabled = true; $('refresh').disabled = true; });
+  socket.on('connect_error', error => { setStatus('Ошибка подключения', 'bad'); detail.textContent = error.message || String(error); });
+  socket.io.on('upgrade', transport => { detail.textContent = 'ID: ' + socket.id + ' · транспорт: ' + transport.name; });
+  $('ping').addEventListener('click', () => {
+    $('ping').disabled = true;
+    socket.timeout(10000).emit('test:echo', {text:'Привет от браузера', at:Date.now()}, (err, response) => {
+      $('ping').disabled = false;
+      if (err || !response || !response.ok) { result.textContent = 'ОШИБКА: ' + (err ? err.message : 'сервер не подтвердил сообщение'); return; }
+      result.textContent = 'УСПЕШНО\n' + JSON.stringify(response, null, 2);
+    });
+  });
+  function loadRooms() {
+    $('refresh').disabled = true;
+    socket.timeout(10000).emit('lobby:list', {}, (err, response) => {
+      $('refresh').disabled = false;
+      if (err || !response || !response.ok) { rooms.textContent = 'Не удалось получить комнаты.'; return; }
+      rooms.textContent = response.rooms.length ? response.rooms.map(r => (r.locked?'🔒 ':'🌐 ')+r.name+' · '+r.players+'/'+r.max+' · '+r.code).join('\n') : 'Активных комнат пока нет.';
+    });
+  }
+  $('refresh').addEventListener('click', loadRooms);
+})();
+</script>
+</body></html>
