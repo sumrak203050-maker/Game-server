@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ПЛАТНЫЙ ДОМ — тест WebSocket</title>
+<style>
+body{margin:0;padding:20px;background:#110d18;color:#f4efe6;font:16px/1.5 system-ui,sans-serif}
+main{max-width:720px;margin:auto;background:#2a2233;border:2px solid #6b5a82;border-radius:12px;padding:18px}
+h1{color:#ffd84a;font-size:22px}
+button{background:#a9791c;border:0;border-radius:8px;padding:12px 16px;color:white;font-weight:700;font-size:16px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#17121e;padding:12px;border-radius:8px;min-height:160px}
+.ok{color:#8aff9a}.bad{color:#ff8a8a}
+</style>
+</head>
+<body>
+<main>
+<h1>ПЛАТНЫЙ ДОМ — проверка Cloudflare</h1>
+<p>Страница проверит HTTP API, затем откроет WebSocket и отправит тестовое сообщение на сервер.</p>
+<button id="run">Запустить проверку</button>
+<pre id="log">Ожидание запуска…</pre>
+</main>
+<script>
+const logBox=document.getElementById("log");
+const button=document.getElementById("run");
+function log(text,ok){const line=(ok===true?"✅ ":ok===false?"❌ ":"ℹ️ ")+text;logBox.textContent+=((logBox.textContent==="Ожидание запуска…")?"":"\n")+line;}
+button.addEventListener("click",async()=>{
+  button.disabled=true;logBox.textContent="";
+  try{
+    const response=await fetch("/health",{cache:"no-store"});
+    const body=await response.json();
+    log("HTTP /health: "+response.status+" — "+JSON.stringify(body),response.ok&&body.ok);
+    if(!response.ok||!body.ok)throw new Error("Health check failed");
+  }catch(error){log("HTTP /health: "+(error.message||error),false);button.disabled=false;return;}
+  const protocol=location.protocol==="https:"?"wss:":"ws:";
+  const ws=new WebSocket(protocol+"//"+location.host+"/ws");
+  const timer=setTimeout(()=>{log("WebSocket: тайм-аут 15 секунд",false);try{ws.close();}catch{}button.disabled=false;},15000);
+  ws.onopen=()=>log("WebSocket: соединение открыто");
+  ws.onerror=()=>{clearTimeout(timer);log("WebSocket: ошибка соединения",false);button.disabled=false;};
+  ws.onclose=()=>{clearTimeout(timer);button.disabled=false;};
+  ws.onmessage=event=>{
+    let message;try{message=JSON.parse(event.data);}catch{return;}
+    if(message.type==="ready"){
+      log("Рукопожатие получено. ID: "+message.id,true);
+      ws.send(JSON.stringify({type:"event",event:"test:echo",data:{text:"Привет от тестовой страницы"},ackId:1}));
+    }else if(message.type==="ack"&&message.id===1){
+      const ok=!!(message.data&&message.data.ok&&message.data.echo==="Привет от тестовой страницы");
+      log("Ответ сервера: "+JSON.stringify(message.data),ok);
+      ws.send(JSON.stringify({type:"event",event:"lobby:list",data:{},ackId:2}));
+    }else if(message.type==="ack"&&message.id===2){
+      log("Список комнат: "+(message.data&&message.data.rooms?message.data.rooms.length:"ошибка")+"; тест завершён",!!(message.data&&message.data.ok));
+      clearTimeout(timer);ws.close(1000,"Test complete");button.disabled=false;
+    }
+  };
+});
+</script>
+</body>
+</html>

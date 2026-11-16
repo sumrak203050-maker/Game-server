@@ -218,7 +218,116 @@ button,.slot,#title{touch-action:manipulation}
 }
 
 </style>
-<script src="/socket.io/socket.io.js"></script>
+<script>
+/* Небольшой Socket.IO-совместимый адаптер поверх обычного WebSocket.
+   Он сохраняет существующие игровые обработчики, но не загружает socket.io.js. */
+(function(){
+  class GameSocket {
+    constructor(serverURL){
+      this.connected=false;
+      this.id=null;
+      this.listeners=new Map();
+      this.pending=new Map();
+      this.sequence=0;
+      this.nextTimeout=20000;
+      this.manualClose=false;
+      this.io={engine:{transport:{name:"websocket"}}};
+      const url=new URL("/ws",serverURL||location.origin);
+      url.protocol=url.protocol==="https:"?"wss:":"ws:";
+      this.ws=new WebSocket(url.toString());
+      this.ws.addEventListener("message",event=>this.onMessage(event.data));
+      this.ws.addEventListener("error",()=>{
+        if(!this.connected)this.trigger("connect_error",new Error("Ошибка WebSocket-соединения"));
+      });
+      this.ws.addEventListener("close",event=>{
+        const wasConnected=this.connected;
+        this.connected=false;
+        for(const [id,pending] of this.pending){
+          clearTimeout(pending.timer);
+          try{pending.callback(new Error("Соединение закрыто"),undefined);}catch{}
+          this.pending.delete(id);
+        }
+        if(wasConnected)this.trigger("disconnect",event.reason||"Соединение закрыто");
+        else if(!this.manualClose)this.trigger("connect_error",new Error(event.reason||"Не удалось открыть WebSocket"));
+      });
+    }
+    on(event,callback){
+      if(!this.listeners.has(event))this.listeners.set(event,new Set());
+      this.listeners.get(event).add(callback);
+      return this;
+    }
+    off(event,callback){
+      const set=this.listeners.get(event);
+      if(!set)return this;
+      if(callback)set.delete(callback);else set.clear();
+      if(!set.size)this.listeners.delete(event);
+      return this;
+    }
+    trigger(event,data){
+      const set=this.listeners.get(event);
+      if(set)for(const callback of [...set]){try{callback(data);}catch(error){console.error(error);}}
+    }
+    onMessage(raw){
+      let message;
+      try{message=JSON.parse(raw);}catch{return;}
+      if(message.type==="ready"){
+        this.id=message.id;
+        this.connected=true;
+        this.trigger("connect");
+        return;
+      }
+      if(message.type==="event"){
+        this.trigger(message.event,message.data);
+        return;
+      }
+      if(message.type==="ack"){
+        const pending=this.pending.get(message.id);
+        if(!pending)return;
+        clearTimeout(pending.timer);
+        this.pending.delete(message.id);
+        try{pending.callback(null,message.data);}catch(error){console.error(error);}
+      }
+    }
+    emit(event,data,callback){
+      if(!this.connected||this.ws.readyState!==WebSocket.OPEN){
+        if(typeof callback==="function")callback(new Error("WebSocket ещё не подключён"),undefined);
+        return this;
+      }
+      const packet={type:"event",event,data:data===undefined?{}:data};
+      if(typeof callback==="function"){
+        const id=++this.sequence;
+        packet.ackId=id;
+        const timeout=this.nextTimeout;
+        const timer=setTimeout(()=>{
+          this.pending.delete(id);
+          try{callback(new Error("Тайм-аут ответа сервера"),undefined);}catch{}
+        },timeout);
+        this.pending.set(id,{callback,timer});
+      }
+      this.nextTimeout=20000;
+      try{this.ws.send(JSON.stringify(packet));}
+      catch(error){
+        if(packet.ackId!=null){
+          const pending=this.pending.get(packet.ackId);
+          if(pending){clearTimeout(pending.timer);this.pending.delete(packet.ackId);callback(error,undefined);}
+        }
+      }
+      return this;
+    }
+    timeout(ms){
+      this.nextTimeout=Math.max(1000,Number(ms)||20000);
+      return this;
+    }
+    disconnect(){
+      this.manualClose=true;
+      this.connected=false;
+      try{this.ws.close(1000,"Client disconnect");}catch{}
+      return this;
+    }
+  }
+  window.io=function(serverURL){return new GameSocket(serverURL);};
+})();
+</script>
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -1242,7 +1351,7 @@ function bindGameSocket(socket){
   });
 }
 function ensureGameSocket(){
-  if(!hasSocket())return Promise.reject(new Error(NET.err||'Socket.IO недоступен'));
+  if(!hasSocket())return Promise.reject(new Error(NET.err||'WebSocket недоступен'));
   if(NET.socket&&NET.socket.connected)return Promise.resolve(NET.socket);
   if(socketConnectPromise)return socketConnectPromise;
   const socket=NET.socket||io(GAME_SERVER_URL,{
@@ -1398,7 +1507,7 @@ async function copyNetworkDiagnostics(){
   }
 }
 function networkDiagUI(){
-  let h='<p>Эта проверка использует новый игровой транспорт Socket.IO. PeerJS больше не нужен для создания комнат, списка и игрового обмена.</p>';
+  let h='<p>Эта проверка соединяет игру с Cloudflare через WebSocket. PeerJS и Socket.IO больше не используются.</p>';
   if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join('\n'))+'</div>';
   if(NET_DIAG.running)h+='<div class="wallet">Идёт проверка… не закрывайте окно.</div>';
   h+='<div class="row">'+btn(NET_DIAG.running?'Проверка…':'▶ Запустить проверку',runNetworkDiagnostics,NET_DIAG.running?'dis':'gold')+btn('📋 Копировать логи',copyNetworkDiagnostics,NET_DIAG.lines.length?'':'dis')+btn('Закрыть',closeUI)+'</div>';
@@ -1411,7 +1520,7 @@ async function runNetworkDiagnostics(){
   add('Браузер',navigator.userAgent||'не определён');
   add('Интернет',navigator.onLine?'подключён':'navigator.onLine=false',!!navigator.onLine);
   add('HTTPS',window.isSecureContext?'безопасный контекст':'откройте игру через HTTPS',!!window.isSecureContext);
-  add('Socket.IO',typeof io==='function'?'клиент загружен':'библиотека не загрузилась',typeof io==='function');
+  add('WebSocket',typeof io==='function'?'клиент WebSocket готов':'библиотека не загрузилась',typeof io==='function');
   if(typeof io!=='function'){NET_DIAG.running=false;refreshUI();return;}
   try{
     const response=await fetch(GAME_SERVER_URL+'/health',{cache:'no-store',mode:'cors',signal:AbortSignal.timeout(90000)});
@@ -1420,11 +1529,11 @@ async function runNetworkDiagnostics(){
   }catch(error){add('Сервер /health',String(error.message||error),false);NET_DIAG.running=false;refreshUI();return;}
   let probe;
   try{probe=io(GAME_SERVER_URL,{transports:['polling','websocket'],tryAllTransports:true,upgrade:true,reconnection:false,timeout:90000});}
-  catch(error){add('Socket.IO',String(error.message||error),false);NET_DIAG.running=false;refreshUI();return;}
+  catch(error){add('WebSocket',String(error.message||error),false);NET_DIAG.running=false;refreshUI();return;}
   let done=false;
   const finish=(ok,message)=>{
     if(done)return;done=true;clearTimeout(timer);
-    add('Socket.IO',ok?'подключено; транспорт: '+(probe.io.engine&&probe.io.engine.transport?probe.io.engine.transport.name:'не определён'):'ошибка: '+message,ok);
+    add('WebSocket',ok?'подключено; транспорт: '+(probe.io.engine&&probe.io.engine.transport?probe.io.engine.transport.name:'не определён'):'ошибка: '+message,ok);
     if(ok){probe.timeout(10000).emit('lobby:list',{},(err,result)=>{add('Каталог комнат',!err&&result&&result.ok?'доступен, комнат: '+result.rooms.length:'не удалось получить список',!err&&!!(result&&result.ok));probe.disconnect();NET_DIAG.running=false;refreshUI();});}
     else{probe.disconnect();NET_DIAG.running=false;refreshUI();}
   };
