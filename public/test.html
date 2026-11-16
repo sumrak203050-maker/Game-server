@@ -3,55 +3,136 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ПЛАТНЫЙ ДОМ — тест WebSocket</title>
+<title>ПЛАТНЫЙ ДОМ — тест сети</title>
 <style>
 body{margin:0;padding:20px;background:#110d18;color:#f4efe6;font:16px/1.5 system-ui,sans-serif}
-main{max-width:720px;margin:auto;background:#2a2233;border:2px solid #6b5a82;border-radius:12px;padding:18px}
+main{max-width:760px;margin:auto;background:#2a2233;border:2px solid #6b5a82;border-radius:12px;padding:18px}
 h1{color:#ffd84a;font-size:22px}
-button{background:#a9791c;border:0;border-radius:8px;padding:12px 16px;color:white;font-weight:700;font-size:16px}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#17121e;padding:12px;border-radius:8px;min-height:160px}
-.ok{color:#8aff9a}.bad{color:#ff8a8a}
+button{background:#a9791c;border:0;border-radius:8px;padding:12px 16px;color:white;font-weight:700;font-size:16px;margin:3px}
+button:disabled{opacity:.45}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#17121e;padding:12px;border-radius:8px;min-height:180px}
+.small{color:#c9bedb;font-size:13px}
 </style>
 </head>
 <body>
 <main>
-<h1>ПЛАТНЫЙ ДОМ — проверка Cloudflare</h1>
-<p>Страница проверит HTTP API, затем откроет WebSocket и отправит тестовое сообщение на сервер.</p>
-<button id="run">Запустить проверку</button>
-<pre id="log">Ожидание запуска…</pre>
+<h1>ПЛАТНЫЙ ДОМ — проверка сети</h1>
+<p>Проверка здоровья Worker, WebSocket, каталога комнат и двусторонней передачи координат между двумя тестовыми игроками.</p>
+<button id="run">Запустить полный тест</button>
+<button id="copy" disabled>Скопировать логи</button>
+<pre id="log">Готов к проверке.</pre>
+<p class="small">Тест создаёт временное открытое лобби и закрывает его после проверки. Он не затрагивает игровые комнаты игроков.</p>
 </main>
 <script>
 const logBox=document.getElementById("log");
-const button=document.getElementById("run");
-function log(text,ok){const line=(ok===true?"✅ ":ok===false?"❌ ":"ℹ️ ")+text;logBox.textContent+=((logBox.textContent==="Ожидание запуска…")?"":"\n")+line;}
-button.addEventListener("click",async()=>{
-  button.disabled=true;logBox.textContent="";
+const runButton=document.getElementById("run");
+const copyButton=document.getElementById("copy");
+const lines=[];
+function log(text,ok){
+  const line=(ok===true?"✅ ":ok===false?"❌ ":"ℹ️ ")+text;
+  lines.push(line);logBox.textContent=lines.join("\n");copyButton.disabled=false;
+}
+function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+class TestSocket{
+  constructor(label){
+    this.label=label;this.ws=new WebSocket((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+"/ws");
+    this.id=null;this.seq=0;this.pending=new Map();this.events=new Map();this.backlog=[];
+    this.ready=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error(label+": WebSocket handshake timeout")),12000);
+      this.ws.onopen=()=>log(label+": WebSocket открыт");
+      this.ws.onerror=()=>{clearTimeout(timer);reject(new Error(label+": WebSocket error"));};
+      this.ws.onclose=()=>{for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new Error("socket closed"));}this.pending.clear();};
+      this.ws.onmessage=event=>{
+        let m;try{m=JSON.parse(event.data);}catch{return;}
+        if(m.type==="ready"){this.id=m.id;clearTimeout(timer);log(label+": подключён, ID "+this.id,true);resolve(this.id);return;}
+        if(m.type==="ack"){
+          const p=this.pending.get(m.id);if(!p)return;
+          clearTimeout(p.timer);this.pending.delete(m.id);p.resolve(m.data);return;
+        }
+        if(m.type==="event"){
+          const entry={event:m.event,data:m.data};
+          this.backlog.push(entry);if(this.backlog.length>100)this.backlog.shift();
+          const listeners=this.events.get(m.event);
+          if(listeners)for(const listener of [...listeners])listener(m.data);
+        }
+      };
+    });
+  }
+  emit(event,data,timeout=12000){
+    const id=++this.seq;
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(this.label+": timeout "+event));},timeout);
+      this.pending.set(id,{resolve,reject,timer});
+      this.ws.send(JSON.stringify({type:"event",event,data:data||{},ackId:id}));
+    });
+  }
+  waitEvent(event,predicate=()=>true,timeout=12000){
+    const buffered=this.backlog.find(item=>item.event===event&&predicate(item.data));
+    if(buffered)return Promise.resolve(buffered.data);
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{off();reject(new Error(this.label+": не получено событие "+event));},timeout);
+      const listener=data=>{if(!predicate(data))return;off();resolve(data);};
+      const off=()=>{clearTimeout(timer);const set=this.events.get(event);if(set){set.delete(listener);if(!set.size)this.events.delete(event);}};
+      if(!this.events.has(event))this.events.set(event,new Set());
+      this.events.get(event).add(listener);
+    });
+  }
+  close(){try{this.ws.close(1000,"Test finished");}catch{}}
+}
+async function fullTest(){
+  runButton.disabled=true;lines.length=0;logBox.textContent="";
+  let host=null,guest=null,code=null;
   try{
-    const response=await fetch("/health",{cache:"no-store"});
-    const body=await response.json();
-    log("HTTP /health: "+response.status+" — "+JSON.stringify(body),response.ok&&body.ok);
-    if(!response.ok||!body.ok)throw new Error("Health check failed");
-  }catch(error){log("HTTP /health: "+(error.message||error),false);button.disabled=false;return;}
-  const protocol=location.protocol==="https:"?"wss:":"ws:";
-  const ws=new WebSocket(protocol+"//"+location.host+"/ws");
-  const timer=setTimeout(()=>{log("WebSocket: тайм-аут 15 секунд",false);try{ws.close();}catch{}button.disabled=false;},15000);
-  ws.onopen=()=>log("WebSocket: соединение открыто");
-  ws.onerror=()=>{clearTimeout(timer);log("WebSocket: ошибка соединения",false);button.disabled=false;};
-  ws.onclose=()=>{clearTimeout(timer);button.disabled=false;};
-  ws.onmessage=event=>{
-    let message;try{message=JSON.parse(event.data);}catch{return;}
-    if(message.type==="ready"){
-      log("Рукопожатие получено. ID: "+message.id,true);
-      ws.send(JSON.stringify({type:"event",event:"test:echo",data:{text:"Привет от тестовой страницы"},ackId:1}));
-    }else if(message.type==="ack"&&message.id===1){
-      const ok=!!(message.data&&message.data.ok&&message.data.echo==="Привет от тестовой страницы");
-      log("Ответ сервера: "+JSON.stringify(message.data),ok);
-      ws.send(JSON.stringify({type:"event",event:"lobby:list",data:{},ackId:2}));
-    }else if(message.type==="ack"&&message.id===2){
-      log("Список комнат: "+(message.data&&message.data.rooms?message.data.rooms.length:"ошибка")+"; тест завершён",!!(message.data&&message.data.ok));
-      clearTimeout(timer);ws.close(1000,"Test complete");button.disabled=false;
-    }
-  };
+    const health=await fetch("/health",{cache:"no-store"});
+    const healthBody=await health.json();
+    log("GET /health: "+health.status+" "+JSON.stringify(healthBody),health.ok&&healthBody.ok);
+    if(!health.ok||!healthBody.ok)throw new Error("Health check failed");
+
+    host=new TestSocket("Игрок A");guest=new TestSocket("Игрок B");
+    await Promise.all([host.ready,guest.ready]);
+
+    const echo=await host.emit("test:echo",{text:"двусторонняя проверка"});
+    log("Серверный echo: "+JSON.stringify(echo),!!(echo&&echo.ok&&echo.echo==="двусторонняя проверка"));
+    if(!echo||!echo.ok)throw new Error("Echo failed");
+
+    const created=await host.emit("lobby:create",{name:"Тест синхронизации",max:2,visibility:"public",password:""});
+    if(!created||!created.ok||!created.room)throw new Error("Не удалось создать тестовую комнату: "+JSON.stringify(created));
+    code=created.room.code;
+    log("Создана временная комната "+code,true);
+
+    const joined=await guest.emit("lobby:join",{code,password:"",name:"Тест B",look:{}});
+    if(!joined||!joined.ok)throw new Error("Второй тестовый клиент не вошёл: "+JSON.stringify(joined));
+    log("Второй клиент вошёл в комнату",true);
+
+    const guestX=777,guestY=444;
+    const hostReceives=host.waitEvent("game:host-message",m=>m&&m.t==="snap"&&m.partial&&m.p&&m.p[guest.id]);
+    await guest.emit("game:state",{s:{x:guestX,y:guestY,d:"r",m:1,a:1,dc:0,s:0,f:0,e:"",h:"",k:0,v:0}});
+    const fromGuest=await hostReceives;
+    log("Движение игрока B → A: "+JSON.stringify(fromGuest.p[guest.id]),fromGuest.p[guest.id].x===guestX&&fromGuest.p[guest.id].y===guestY);
+
+    const hostX=333,hostY=555;
+    const guestReceives=guest.waitEvent("game:host-message",m=>m&&m.t==="snap"&&m.partial&&m.p&&m.p[host.id]);
+    await host.emit("game:state",{s:{x:hostX,y:hostY,d:"l",m:1,a:2,dc:0,s:0,f:0,e:"",h:"",k:0,v:0}});
+    const fromHost=await guestReceives;
+    log("Движение игрока A → B: "+JSON.stringify(fromHost.p[host.id]),fromHost.p[host.id].x===hostX&&fromHost.p[host.id].y===hostY);
+
+    const roomList=await guest.emit("lobby:list",{});
+    log("Каталог комнат: "+(roomList&&roomList.rooms?roomList.rooms.length:"ошибка")+"; тестовая комната найдена: "+!!(roomList&&roomList.rooms&&roomList.rooms.some(r=>r.code===code)),!!(roomList&&roomList.ok&&roomList.rooms.some(r=>r.code===code)));
+
+    log("ПОЛНЫЙ ТЕСТ СИНХРОНИЗАЦИИ ПРОЙДЕН",true);
+  }catch(error){
+    log("ТЕСТ НЕ ПРОЙДЕН: "+(error&&error.message||error),false);
+  }finally{
+    if(guest){try{await guest.emit("lobby:leave",{},3000);}catch{}guest.close();}
+    if(host){try{await host.emit("lobby:leave",{},3000);}catch{}host.close();}
+    runButton.disabled=false;
+  }
+}
+runButton.addEventListener("click",fullTest);
+copyButton.addEventListener("click",async()=>{
+  const textValue=["ПЛАТНЫЙ ДОМ — СЕТЕВОЙ ТЕСТ","Время: "+new Date().toISOString(),"Адрес: "+location.href,"",...lines].join("\n");
+  try{await navigator.clipboard.writeText(textValue);log("Логи скопированы в буфер обмена",true);}
+  catch{const area=document.createElement("textarea");area.value=textValue;document.body.appendChild(area);area.select();document.execCommand("copy");area.remove();log("Логи скопированы запасным способом",true);}
 });
 </script>
 </body>
