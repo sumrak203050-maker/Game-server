@@ -381,7 +381,7 @@ button,.slot,#title{touch-action:manipulation}
 const GAME_SERVER_URL = window.location.origin;
 /* =====================================================================
    ПЛАТНЫЙ ДОМ — онлайн. Тайловая карта 108x60, тайл = 16px.
-   Сеть: Socket.IO. Хост лобби — «авторитетный» (хранит состояние игры),
+   Сеть: WebSocket. Хост лобби — «авторитетный» (хранит состояние игры),
    остальные игроки подключаются к нему по коду лобби.
    ===================================================================== */
 const T=16, W=108, H=60, O='#1d1624';
@@ -1261,7 +1261,7 @@ function openServer(){
   });
 }
 /* =====================================================================
-   СЕТЬ (Socket.IO): единый сервер комнат и авторитетный хост игры
+   СЕТЬ (WebSocket): единый сервер комнат и авторитетный хост игры
    ===================================================================== */
 let lobbyView='menu';
 const ROOM_SETTINGS={visibility:'public',password:''};
@@ -1275,7 +1275,7 @@ function refreshStart(){if(uiOpen&&uiFn===startUI)liveRefresh();}
 function randCode(){const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<5;i++)c+=A[rnd(A.length)];return c;}
 function hasSocket(){
   if(typeof io!=='function'){
-    NET.err='Не загрузилась библиотека Socket.IO. Проверьте интернет и обновите страницу.';
+    NET.err='WebSocket-клиент недоступен. Обновите страницу и проверьте поддержку WebSocket в браузере.';
     refreshStart();return false;
   }
   if(!navigator.onLine){NET.err='На устройстве нет подключения к интернету.';refreshStart();return false;}
@@ -1378,7 +1378,7 @@ function ensureGameSocket(){
       if(error)reject(error);else resolve(socket);
     };
     const onConnect=()=>finish(null);
-    const onError=error=>{lastError=error&&error.message?error.message:String(error||'ошибка подключения');};
+    const onError=error=>{lastError=error&&error.message?error.message:String(error||'ошибка подключения');finish(new Error('WebSocket: '+lastError));};
     const timer=setTimeout(()=>finish(new Error('Сервер не ответил за 90 секунд. '+(lastError?'Последняя ошибка: '+lastError:'Проверьте доступность сервера и интернет-соединение.'))),90000);
     socket.on('connect',onConnect);socket.on('connect_error',onError);
     if(socket.connected)finish(null);
@@ -1478,7 +1478,7 @@ function chooseLobby(item){
   FORM.code=item.code;FORM.joinPass='';FORM.joinName=item.name;FORM.joinLocked=!!item.locked;
   NET.err='';lobbyView='join';refreshUI();
 }
-/* Проверка HTTP + реального Socket.IO подключения к тому же серверу. */
+/* Проверка HTTP + реального WebSocket-подключения к тому же серверу. */
 async function copyNetworkDiagnostics(){
   const report=[
     'ПЛАТНЫЙ ДОМ — ДИАГНОСТИКА СЕТИ',
@@ -1810,7 +1810,7 @@ function sendProfile(){
   else sendHost({t:'prof',name:NM(),look:Object.assign({},S.look)});
 }
 /* =====================================================================
-   ГОЛОСОВОЙ ЧАТ (WebRTC, сигналинг через Socket.IO)
+   ГОЛОСОВОЙ ЧАТ (WebRTC, сигналинг через WebSocket)
    ===================================================================== */
 const V={ctx:null,dest:null,out:null,mic:null,src:null,on:false,rem:{},calls:{},iceQueue:{}};
 function voiceInit(){
