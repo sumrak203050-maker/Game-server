@@ -1370,12 +1370,39 @@ function chooseLobby(item){
   NET.err='';lobbyView='join';refreshUI();
 }
 /* Проверка HTTP + реального Socket.IO подключения к тому же серверу. */
+async function copyNetworkDiagnostics(){
+  const report=[
+    'ПЛАТНЫЙ ДОМ — ДИАГНОСТИКА СЕТИ',
+    'Время: '+new Date().toISOString(),
+    'Страница: '+location.href,
+    'Сервер: '+GAME_SERVER_URL,
+    'Проверка: '+(NET_DIAG.running?'выполняется':'остановлена'),
+    '',
+    ...(NET_DIAG.lines.length?NET_DIAG.lines:['Логи пока пусты. Сначала запустите проверку.'])
+  ].join('\n');
+  const fallbackCopy=()=>{
+    const area=document.createElement('textarea');
+    area.value=report;area.setAttribute('readonly','');
+    area.style.position='fixed';area.style.left='-9999px';area.style.top='0';
+    document.body.appendChild(area);area.focus();area.select();area.setSelectionRange(0,area.value.length);
+    let ok=false;try{ok=document.execCommand('copy');}finally{area.remove();}
+    if(!ok)throw new Error('Браузер не разрешил копирование');
+  };
+  try{
+    if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(report);
+    else fallbackCopy();
+    toast('Диагностические логи скопированы');
+  }catch(error){
+    try{fallbackCopy();toast('Диагностические логи скопированы');}
+    catch(copyError){toast('Не удалось скопировать. Попробуйте выделить текст логов вручную.');}
+  }
+}
 function networkDiagUI(){
   let h='<p>Эта проверка использует новый игровой транспорт Socket.IO. PeerJS больше не нужен для создания комнат, списка и игрового обмена.</p>';
-  if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join('\n'))+'</div>';
+  if(NET_DIAG.lines.length)h+='<div class="wallet" style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(NET_DIAG.lines.join(\'\\n\'))+'</div>';
   if(NET_DIAG.running)h+='<div class="wallet">Идёт проверка… не закрывайте окно.</div>';
-  h+='<div class="row">'+btn(NET_DIAG.running?'Проверка…':'▶ Запустить проверку',runNetworkDiagnostics,NET_DIAG.running?'dis':'gold')+btn('Закрыть',closeUI)+'</div>';
-  h+='<p class="small">Пришлите скриншот результата. Пароли проверка не показывает.</p>';return h;
+  h+='<div class="row">'+btn(NET_DIAG.running?'Проверка…':'▶ Запустить проверку',runNetworkDiagnostics,NET_DIAG.running?'dis':'gold')+btn('📋 Копировать логи',copyNetworkDiagnostics,NET_DIAG.lines.length?'':'dis')+btn('Закрыть',closeUI)+'</div>';
+  h+='<p class="small">Нажмите «Копировать логи» и вставьте результат сюда. Пароли проверка не показывает.</p>';return h;
 }
 async function runNetworkDiagnostics(){
   if(NET_DIAG.running)return;
